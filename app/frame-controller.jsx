@@ -1,3 +1,8 @@
+"use client";
+
+import { useEffect } from "react";
+
+function initializeFrames() {
 const canvas = document.querySelector('#frames');
 const ctx = canvas.getContext('2d');
 const sequence = document.querySelector('.sequence');
@@ -5,6 +10,7 @@ const stage = document.querySelector('.stage');
 const status = document.querySelector('#upload-status');
 const upload = document.querySelector('#upload');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let disposed = false;
 let sources = [], ownedUrls = [], cache = new Map(), currentFrame = -1, progress = 0, scheduled = false, generation = 0;
 const naturalSort = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
 function resize() {
@@ -64,7 +70,9 @@ function update() {
   }
   paint();
 }
-addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, { passive: true });
+let animationId;
+function onScroll() { if (!scheduled) { scheduled = true; animationId = requestAnimationFrame(update); } }
+addEventListener('scroll', onScroll, { passive: true });
 addEventListener('resize', resize);
 function installFrames(items) {
   if (!items.length) throw new Error('No PNG, JPG or WEBP frames found.');
@@ -122,7 +130,7 @@ async function unzipFrames(file) {
   }
   return frames;
 }
-upload.addEventListener('change', async () => {
+async function onUpload() {
   const files = [...upload.files];
   if (!files.length) return;
   upload.disabled = true;
@@ -130,16 +138,34 @@ upload.addEventListener('change', async () => {
   try {
     const archive = files.find(file => /\.zip$/i.test(file.name));
     const items = archive ? await unzipFrames(archive) : files.filter(file => /\.(png|jpe?g|webp)$/i.test(file.name)).map(file => ({ name: file.name, blob: file }));
-    installFrames(items);
+    if (!disposed) installFrames(items);
   } catch (error) { status.textContent = error.message || 'Unable to load frames. Try selecting the extracted images.'; }
   finally { upload.disabled = false; upload.value = ''; }
-});
+}
+upload.addEventListener('change', onUpload);
 async function loadBundled() {
   try {
-    const response = await fetch('public/frames/manifest.json');
+    const response = await fetch('/frames/manifest.json');
     if (!response.ok) return;
     const names = await response.json();
-    if (Array.isArray(names) && names.length) installFrames(names.map(name => ({ name, url: `public/frames/${encodeURIComponent(name)}` })));
+    if (!disposed && Array.isArray(names) && names.length) installFrames(names.map(name => ({ name, url: `/frames/${encodeURIComponent(name)}` })));
   } catch { /* The browser importer remains available when no bundled frames exist. */ }
 }
 resize(); update(); loadBundled();
+
+return () => {
+ disposed = true; generation++;
+ cancelAnimationFrame(animationId);
+ removeEventListener("scroll", onScroll);
+ removeEventListener("resize", resize);
+ upload.removeEventListener("change", onUpload);
+ ownedUrls.forEach(url => URL.revokeObjectURL(url));
+ cache.clear();
+};
+
+}
+
+export default function FrameController() {
+ useEffect(initializeFrames, []);
+ return null;
+}
